@@ -4,11 +4,6 @@ import requests
 import sqlite3
 import datetime
 
-#Should work for any subreddit, just change the URL
-
-
-
-#Reddit blocks requests without a user agent, so we need to fake one
 
 def startScrape():
     headers = {
@@ -22,7 +17,7 @@ def startScrape():
 
     #Find all posts on the page
     posts = soup.find_all('div', class_='thing')
-
+    
     for post in posts:
         comments_element = post.find('a', class_='bylink comments may-blank')
         
@@ -39,7 +34,8 @@ def startScrape():
             
             #save all relevant data to the database
             saveUserDB(author_name)
-            savePostDB(title, url, comments_url, upvotes, reddit_post_id, author_name)
+            if savePostDB(title, url, comments_url, upvotes, reddit_post_id, author_name) == 1 :
+                break
             
             #switch to parcing comments
             response = requests.get(comments_url, headers=headers)
@@ -52,15 +48,23 @@ def startScrape():
                     comment_author = comment.find('a', class_='author').text
                     comment_author_url = urljoin(USERURL, comment_author)
                     print (comment_content)
+                    saveUserDB(comment_author)
                     saveCommentDB(comment_content, comment_author, reddit_post_id)
+                    
+                    
             
             print(author_name)
             print(author_url)
             print(upvotes)
             
 
-            
-
+#function to pull most recent 10 posts from the database (I want 10 posts to compare while parcing so we dont wind up parcing the same posts twice, i think just pulling one
+#will cause issues in case somebody deletes a post)
+def getTenPostsDB():
+    conn = sqlite3.connect('reddit.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM posts ORDER BY date_created DESC LIMIT 10")
+    return c.fetchall()
 
 def savePostDB(title, url, comments_url, upvotes, reddit_post_id, author_name):
     conn = sqlite3.connect('reddit.db')
@@ -73,6 +77,8 @@ def savePostDB(title, url, comments_url, upvotes, reddit_post_id, author_name):
     if result is not None:
         # If the post already exists, update the upvote count
         c.execute("UPDATE posts SET upvotes = ? WHERE reddit_post_id = ?", (upvotes, reddit_post_id))
+        #returning 1 to break the loop when the the parse reaches a post that is already in the database
+        return 1
     else:
         # If the post doesn't exist, insert a new row
         c.execute("SELECT userid FROM users WHERE username = ?", (author_name,))
@@ -112,9 +118,16 @@ def saveCommentDB(comment_content, comment_author, reddit_post_id):
     c.execute("SELECT userid FROM users WHERE username = ?", (comment_author,))
     user_id_result = c.fetchone()
 
+    # If the user doesn't exist, insert a new row in the users table
+    if user_id_result is None:
+        date_created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT INTO users (username, account_creation_date) VALUES (?, ?)",
+                    (comment_author, date_created))
+        user_id_result = c.lastrowid
+
     if post_id_result is not None and user_id_result is not None:
         post_id = post_id_result[0]
-        user_id = user_id_result[0]
+        user_id = user_id_result
 
         # Save the comment content, reddit_post_id, and userid to the database
         date_created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -123,6 +136,13 @@ def saveCommentDB(comment_content, comment_author, reddit_post_id):
 
     conn.commit()
 
+
+    #right now I am saving the account creation date as the current date, but this should be changed to the date the account was created, and 
+    # that will need to be scraped from the user's profile page
+
+
+    # Should be changing db schema to use reddits unique id for users and posts, and then use that to link comments to posts and users that way 
+    # we can avoid having to look up the user id and post id every time we want to save a comment
     
 startScrape()
 
